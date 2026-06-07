@@ -488,9 +488,9 @@ function tick(){
       t.done=true;
       tEl.textContent='00:00';
       t.card.classList.add('alarm');
-      t.card.querySelector('.t-name').textContent='¡LISTO! '+t.name;
+      t.card.querySelector('.t-name').textContent='🔔 ¡LISTO! '+t.name+' — tocá ✕ para silenciar';
       t.btn.classList.remove('running');t.btn.textContent='✓ Cumplido';
-      alarma();
+      alarma(id);
       releaseWakeLockIfIdle();
     }else{
       tEl.textContent=fmt(rem);
@@ -499,21 +499,44 @@ function tick(){
 }
 setInterval(tick,500);
 
-function stopTimer(id){const t=timers[id];if(t&&t.card)t.card.remove();delete timers[id];releaseWakeLockIfIdle();}
+function stopTimer(id){cortarAlarma(id);const t=timers[id];if(t&&t.card)t.card.remove();delete timers[id];releaseWakeLockIfIdle();}
 
-function alarma(){
-  // 1) vibración (suele funcionar aunque el celu esté en silencio)
-  try{ if(navigator.vibrate) navigator.vibrate([400,150,400,150,600]); }catch(e){}
-  // 2) sonido
-  try{
-    const ctx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
-    if(ctx.state==='suspended')ctx.resume();
-    [0,300,600].forEach(d=>{const o=ctx.createOscillator(),g=ctx.createGain();
-      o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type='sine';
-      g.gain.setValueAtTime(.3,ctx.currentTime+d/1000);
-      g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+d/1000+.25);
-      o.start(ctx.currentTime+d/1000);o.stop(ctx.currentTime+d/1000+.25);});
-  }catch(e){}
+const alarmasActivas={};   // id de tarjeta -> handle de repetición
+function alarma(cardId){
+  // Vibración insistente y larga (suele andar aunque el celu esté en silencio)
+  try{ if(navigator.vibrate) navigator.vibrate([600,200,600,200,600,200,600,200,800]); }catch(e){}
+  // Sonido fuerte: ráfaga de beeps agudos. Se repite cada 2.2s hasta cortar la alarma.
+  const ctx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+  if(ctx.state==='suspended')ctx.resume();
+  function rafaga(){
+    // patron tipo "alarma": tonos agudos alternados, volumen alto
+    const patron=[
+      [0,1040],[160,1040],[320,1040],
+      [560,1320],[720,1320],[880,1320],
+      [1120,1560]
+    ];
+    patron.forEach(([d,freq])=>{
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);
+      o.frequency.value=freq;o.type='square';      // 'square' suena más fuerte/penetrante que 'sine'
+      const t0=ctx.currentTime+d/1000;
+      g.gain.setValueAtTime(0.0001,t0);
+      g.gain.exponentialRampToValueAtTime(0.9,t0+0.02);   // volumen alto
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+0.16);
+      o.start(t0);o.stop(t0+0.18);
+    });
+  }
+  try{ rafaga(); }catch(e){}
+  // repetir la ráfaga hasta que el usuario corte la alarma
+  if(cardId){
+    alarmasActivas[cardId]=setInterval(()=>{
+      try{ if(navigator.vibrate) navigator.vibrate([600,200,600]); rafaga(); }catch(e){}
+    },2200);
+  }
+}
+function cortarAlarma(cardId){
+  if(alarmasActivas[cardId]){clearInterval(alarmasActivas[cardId]);delete alarmasActivas[cardId];}
+  try{ if(navigator.vibrate) navigator.vibrate(0); }catch(e){}
 }
 renderIngredients('ing-panleche',data.panleche.ingredients);
 renderSteps('steps-panleche',data.panleche.steps);
