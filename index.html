@@ -214,6 +214,7 @@
   <h1>Panadería Dulce</h1>
   <div class="sub">Pan de Leche · Miguelitos · Tortitas Negras</div>
   <div class="date-pill">🥖 Guía de trabajo — Clase del Lunes</div>
+  <div style="margin-top:12px;font-size:.78rem;opacity:.9;position:relative;max-width:520px;margin-left:auto;margin-right:auto">⏱️ Los timers mantienen la pantalla encendida y avisan con sonido y vibración. Mantené esta página abierta mientras cocinás.</div>
 </header>
 
 <nav id="nav">
@@ -438,33 +439,82 @@ document.querySelectorAll('.tab').forEach(t=>{
     window.scrollTo({top:0,behavior:'smooth'});
   };
 });
-const timers={};
+/* ---------- TIMERS basados en tiempo real (resisten salir/volver) ---------- */
+const timers={};      // id -> {endAt, name, btn, done}
+let wakeLock=null;    // mantiene la pantalla encendida con timer activo
+let audioCtx=null;
+
+async function requestWakeLock(){
+  try{ if('wakeLock' in navigator && !wakeLock){ wakeLock=await navigator.wakeLock.request('screen'); 
+    wakeLock.addEventListener('release',()=>{wakeLock=null}); } }catch(e){}
+}
+function releaseWakeLockIfIdle(){
+  const activos=Object.values(timers).some(t=>!t.done);
+  if(!activos && wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
+}
+// Si la pantalla se desbloquea o se vuelve a la pestaña, re-pedimos el wake lock y re-pintamos
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'){
+    const activos=Object.values(timers).some(t=>!t.done);
+    if(activos) requestWakeLock();
+    tick();
+  }
+});
+
+const fmt=s=>{s=Math.max(0,s);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');};
+
 function startTimer(name,secs,btn){
   if(btn.classList.contains('running'))return;
+  // desbloquea el audio en este gesto del usuario (clave para que suene luego)
+  try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==='suspended')audioCtx.resume(); }catch(e){}
+  requestWakeLock();
   btn.classList.add('running');btn.textContent='⏱️ Corriendo...';
   const id='tm'+Date.now();
   const card=document.createElement('div');
   card.className='timer-card';card.id=id;
-  card.innerHTML=`<div><div class="t-name">${name}</div><div class="t-time">--:--</div></div><button onclick="stopTimer('${id}')">✕</button>`;
+  card.innerHTML=`<div><div class="t-name">${name}</div><div class="t-time">${fmt(secs)}</div></div><button onclick="stopTimer('${id}')">✕</button>`;
   document.getElementById('timerPop').appendChild(card);
-  let remaining=secs;
-  const tEl=card.querySelector('.t-time');
-  const fmt=s=>String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
-  tEl.textContent=fmt(remaining);
-  timers[id]=setInterval(()=>{
-    remaining--;tEl.textContent=fmt(remaining);
-    if(remaining<=0){clearInterval(timers[id]);card.classList.add('alarm');
-      card.querySelector('.t-name').textContent='¡LISTO! '+name;tEl.textContent='00:00';
-      btn.classList.remove('running');btn.textContent='✓ Cumplido';try{beep()}catch(e){}}
-  },1000);
+  timers[id]={endAt:Date.now()+secs*1000,name,btn,done:false,card};
 }
-function stopTimer(id){clearInterval(timers[id]);const c=document.getElementById(id);if(c)c.remove()}
-function beep(){const ctx=new (window.AudioContext||window.webkitAudioContext)();
-  [0,300,600].forEach(d=>{const o=ctx.createOscillator(),g=ctx.createGain();
-    o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type='sine';
-    g.gain.setValueAtTime(.3,ctx.currentTime+d/1000);
-    g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+d/1000+.25);
-    o.start(ctx.currentTime+d/1000);o.stop(ctx.currentTime+d/1000+.25);});}
+
+function tick(){
+  const now=Date.now();
+  for(const id in timers){
+    const t=timers[id];
+    if(t.done)continue;
+    const rem=Math.round((t.endAt-now)/1000);
+    const tEl=t.card.querySelector('.t-time');
+    if(rem<=0){
+      t.done=true;
+      tEl.textContent='00:00';
+      t.card.classList.add('alarm');
+      t.card.querySelector('.t-name').textContent='¡LISTO! '+t.name;
+      t.btn.classList.remove('running');t.btn.textContent='✓ Cumplido';
+      alarma();
+      releaseWakeLockIfIdle();
+    }else{
+      tEl.textContent=fmt(rem);
+    }
+  }
+}
+setInterval(tick,500);
+
+function stopTimer(id){const t=timers[id];if(t&&t.card)t.card.remove();delete timers[id];releaseWakeLockIfIdle();}
+
+function alarma(){
+  // 1) vibración (suele funcionar aunque el celu esté en silencio)
+  try{ if(navigator.vibrate) navigator.vibrate([400,150,400,150,600]); }catch(e){}
+  // 2) sonido
+  try{
+    const ctx=audioCtx||new (window.AudioContext||window.webkitAudioContext)();
+    if(ctx.state==='suspended')ctx.resume();
+    [0,300,600].forEach(d=>{const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type='sine';
+      g.gain.setValueAtTime(.3,ctx.currentTime+d/1000);
+      g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+d/1000+.25);
+      o.start(ctx.currentTime+d/1000);o.stop(ctx.currentTime+d/1000+.25);});
+  }catch(e){}
+}
 renderIngredients('ing-panleche',data.panleche.ingredients);
 renderSteps('steps-panleche',data.panleche.steps);
 renderIngredients('ing-tortitas',data.tortitas.ingredients);
